@@ -1,4 +1,4 @@
-import * as glm from 'gl-matrix'
+import { vec3, mat4, glMatrix } from 'gl-matrix'
 
 import vs from './shader/pbr.vs'
 import fs from './shader/pbr.fs'
@@ -32,6 +32,193 @@ class GLTFLoader {
     this.binFiles = binFiles
     this.images = images
   }
+
+  accessData(accessorIndex) {
+    let accessor = this.accessors[accessorIndex]
+    if (accessor.id === accessorIndex) {
+      return accessor
+    }
+    accessor.id = accessorIndex
+    let bufferView = this.bufferViews[accessor.bufferView]
+    let bin = this.binFiles[bufferView.buffer]
+    let stepSize = componentTypedArray[accessor.componentType].BYTES_PER_ELEMENT * typeSize[accessor.type]
+    let arrayType = componentTypedArray[accessor.componentType]
+    let start, end
+
+    start = 0
+    end = accessor.count * stepSize
+    if (bufferView.byteOffset !== undefined) {
+      start += bufferView.byteOffset
+      end += bufferView.byteOffset
+    }
+
+    accessor.itemSize = typeSize[accessor.type]
+    accessor.bufferData = new arrayType(bin.slice(start, end))
+    return accessor
+  }
+
+  loadMaterial(materialIndex) {
+    let material = this.materials[materialIndex]
+    if (material.id === materialIndex) {
+      return material
+    }
+    material.id = materialIndex
+    material.defines = {}
+    let self = this
+    let replaceSource = function (texture) {
+      if (!isNaN(texture.source)) {
+        texture.source = self.images[texture.source]
+      }
+    }
+
+    if (material.pbrMetallicRoughness !== undefined) {
+      let mr = material.pbrMetallicRoughness
+      if (mr.baseColorTexture !== undefined) {
+        material.defines.HAS_BASECOLORMAP = 1
+        mr.baseColorTexture = this.textures[mr.baseColorTexture.index]
+        replaceSource(mr.baseColorTexture)
+      }
+      if (mr.metallicRoughnessTexture !== undefined) {
+        material.defines.HAS_METALROUGHNESSMAP = 1
+        mr.metallicRoughnessTexture = this.textures[mr.metallicRoughnessTexture.index]
+        replaceSource(mr.metallicRoughnessTexture)
+      }
+      if (mr.metallicFactor === undefined) {
+        mr.metallicFactor = 1
+      }
+      if (mr.roughnessFactor === undefined) {
+        mr.roughnessFactor = 1
+      }
+      if (mr.baseColorFactor === undefined) {
+        mr.baseColorFactor = [1, 1, 1, 1]
+      }
+    }
+    if (material.normalTexture !== undefined) {
+      material.defines.HAS_NORMALMAP = 1
+      material.normalTexture = this.textures[material.normalTexture.index]
+      replaceSource(material.normalTexture)
+      if (material.normalTexture.scale === undefined) {
+        material.normalTexture.scale = 1
+      }
+    }
+    if (material.emissiveTexture !== undefined) {
+      material.defines.HAS_EMISSIVEMAP = 1
+      material.emissiveTexture = this.textures[material.emissiveTexture.index]
+      replaceSource(material.emissiveTexture)
+    }
+    if (material.emissiveFactor === undefined) {
+      material.emissiveFactor = [0, 0, 0]
+    }
+    if (material.alphaMode === undefined) {
+      material.alphaMode = 'OPAQUE'
+    }
+    if (material.alphaCutoff === undefined) {
+      material.alphaCutoff = 0.5
+    }
+    if (material.doubleSided === undefined) {
+      material.doubleSided = false
+    }
+
+    return material
+  }
+
+  loadMesh(meshIndex) {
+    let mesh = this.meshes[meshIndex]
+    if (mesh.id === meshIndex) {
+      return mesh
+    }
+    mesh.id = meshIndex
+    let length = mesh.primitives.length
+    for (let i = 0; i < length; i++) {
+      let primitive = mesh.primitives[i]
+      primitive.defines = {}
+      primitive.indices = this.accessData(primitive.indices)
+      let attributes = Object.keys(primitive.attributes)
+
+      attributes.forEach(attribute => {
+        let bufferData = this.accessData(primitive.attributes[attribute])
+        primitive.attributes[attribute] = bufferData
+        switch (attribute) {
+          case "NORMAL":
+            primitive.defines.HAS_NORMALS = 1
+            break
+          case "TANGENT":
+            primitive.defines.HAS_TANGENTS = 1
+            break
+          case "TEXCOORD_0":
+            primitive.defines.HAS_UV = 1
+            break
+        }
+      })
+
+      if (primitive.material !== undefined) {
+        primitive.material = this.loadMaterial(primitive.material)
+        primitive.defines = Object.assign(primitive.defines, primitive.material.defines)
+      }
+
+      primitive.getDefines = function () {
+        let definesToString = function (defines) {
+          let outStr = ''
+          for (let def in defines) {
+            outStr += '#define ' + def + ' ' + defines[def] + '\n'
+          }
+          return outStr
+        }
+        return definesToString(this.defines)
+      }
+    }
+
+    return mesh
+  }
+
+  loadScene(sceneIndex) {
+    let scene = this.scenes[sceneIndex]
+    if (scene.id === sceneIndex) {
+      return node
+    }
+    scene.id = sceneIndex
+    if (scene.nodes !== undefined) {
+      let nodeIndexes = scene.nodes.slice()
+      scene.nodes = []
+      nodeIndexes.forEach(nodeIndex => {
+        scene.nodes.push(this.loadNode(nodeIndex))
+      })
+    }
+
+    return scene
+  }
+
+  loadNode(nodeIndex) {
+    let node = this.nodes[nodeIndex]
+    if (node.id === nodeIndex) {
+      return node
+    }
+    node.id = nodeIndex
+    if (node.matrix === undefined) {
+      node.matrix = mat4.create()
+      if (node.translation) {
+        mat4.translate(node.matrix, node.matrix, node.translation)
+      }
+      if (node.rotation) {
+        let rotation = mat4.create()
+        mat4.fromQuat(rotation, node.rotation)
+        mat4.mul(node.matrix, node.matrix, rotation)
+      }
+      if (node.scale) {
+        mat4.scale(node.matrix, node.matrix, node.scale)
+      }
+    }
+    if (node.mesh !== undefined) {
+      node.mesh = this.loadMesh(node.mesh)
+    }
+    if (node.children !== undefined) {
+      node.children.forEach((childIndex, i) => {
+        node.children[i] = this.loadNode(childIndex)
+      })
+    }
+    return node
+  }
+
 
   initMeshBuffers(mesh, gl) {
     mesh.primitives.forEach((primitive) => {
@@ -105,7 +292,6 @@ class GLTFLoader {
       setTexture(material.emissiveTexture, gl, 3)
     }
   }
-
 
   useMaterial(material, gl, shader) {
     // shader.use()
@@ -238,8 +424,8 @@ class GLTFLoader {
     let currentValue
     // currentValue = previousValue + interpolationValue * (nextValue - previousValue)
     if (itemSize === 4) {
-      currentValue = glm.quat.create()
-      glm.quat.slerp(currentValue, previousValue, nextValue, interpolationValue)
+      currentValue = quat.create()
+      quat.slerp(currentValue, previousValue, nextValue, interpolationValue)
     } else {
       currentValue = []
       if (sampler.interpolation === 'LINEAR') {
@@ -261,203 +447,87 @@ class GLTFLoader {
           m0[i] = (nextTime - previousTime) * previousValue[2 * itemSize + i]
           m1[i] = (nextTime - previousTime) * nextValue[i]
         }
-        currentValue = glm.vec3.create()
+        currentValue = vec3.create()
         let t = interpolationValue
-        glm.vec3.scaleAndAdd(currentValue, currentValue, p0, (2 * t ** 3 - 3 * t ** 2 + 1))
-        glm.vec3.scaleAndAdd(currentValue, currentValue, m0, (t ** 3 - 2 * t ** 2 + t))
-        glm.vec3.scaleAndAdd(currentValue, currentValue, p1, (-2 * t ** 3 + 3 * t ** 2))
-        glm.vec3.scaleAndAdd(currentValue, currentValue, m1, (t ** 3 - t ** 2))
+        vec3.scaleAndAdd(currentValue, currentValue, p0, (2 * t ** 3 - 3 * t ** 2 + 1))
+        vec3.scaleAndAdd(currentValue, currentValue, m0, (t ** 3 - 2 * t ** 2 + t))
+        vec3.scaleAndAdd(currentValue, currentValue, p1, (-2 * t ** 3 + 3 * t ** 2))
+        vec3.scaleAndAdd(currentValue, currentValue, m1, (t ** 3 - t ** 2))
       }
     }
     return currentValue
   }
 
-  loadMaterial(materialIndex, primitive) {
-    let material = this.materials[materialIndex]
-    if (material.id === materialIndex) {
-      primitive.defines = Object.assign(primitive.defines, material.defines)
-      return material
-    }
-    material.id = materialIndex
-    material.defines = {}
-    let self = this
-    let replaceSource = function (texture) {
-      if (!isNaN(texture.source)) {
-        texture.source = self.images[texture.source]
-      }
-    }
 
-    if (material.pbrMetallicRoughness !== undefined) {
-      let mr = material.pbrMetallicRoughness
-      if (mr.baseColorTexture !== undefined) {
-        material.defines.HAS_BASECOLORMAP = 1
-        mr.baseColorTexture = this.textures[mr.baseColorTexture.index]
-        replaceSource(mr.baseColorTexture)
-      }
-      if (mr.metallicRoughnessTexture !== undefined) {
-        material.defines.HAS_METALROUGHNESSMAP = 1
-        mr.metallicRoughnessTexture = this.textures[mr.metallicRoughnessTexture.index]
-        replaceSource(mr.metallicRoughnessTexture)
-      }
-      if (mr.metallicFactor === undefined) {
-        mr.metallicFactor = 1
-      }
-      if (mr.roughnessFactor === undefined) {
-        mr.roughnessFactor = 1
-      }
-      if (mr.baseColorFactor === undefined) {
-        mr.baseColorFactor = [1, 1, 1, 1]
-      }
-    }
-    if (material.normalTexture !== undefined) {
-      material.defines.HAS_NORMALMAP = 1
-      material.normalTexture = this.textures[material.normalTexture.index]
-      replaceSource(material.normalTexture)
-      if (material.normalTexture.scale === undefined) {
-        material.normalTexture.scale = 1
-      }
-    }
-    if (material.emissiveTexture !== undefined) {
-      material.defines.HAS_EMISSIVEMAP = 1
-      material.emissiveTexture = this.textures[material.emissiveTexture.index]
-      replaceSource(material.emissiveTexture)
-    }
-    if (material.emissiveFactor === undefined) {
-      material.emissiveFactor = [0, 0, 0]
-    }
-    if (material.alphaMode === undefined) {
-      material.alphaMode = 'OPAQUE'
-    }
-    if (material.alphaCutoff === undefined) {
-      material.alphaCutoff = 0.5
-    }
-    if (material.doubleSided === undefined) {
-      material.doubleSided = false
-    }
-    primitive.defines = Object.assign(primitive.defines, material.defines)
-    return material
+  renderScene(gl, scene, camera, tansfromMatrix) {
+    this.view = camera.getViewMatrix()
+    this.projection = mat4.create()
+    this.view_postion = camera.position
+    mat4.perspective(this.projection, glMatrix.toRadian(camera.zoom), gl.canvas.clientWidth / gl.canvas.clientHeight, 0.1, 100)
+
+    scene.nodes.forEach(node => {
+      let modelMatrix = tansfromMatrix || mat4.create()
+      this.renderNode(gl, node, modelMatrix)
+    })
   }
 
-  loadMesh(meshIndex) {
-    let mesh = this.meshes[meshIndex]
-    if (mesh.id === meshIndex) {
-      return mesh
-    }
-    mesh.id = meshIndex
-    let length = mesh.primitives.length
-    for (let i = 0; i < length; i++) {
-      let primitive = mesh.primitives[i]
-      primitive.defines = {}
-      primitive.indices = this.accessData(primitive.indices)
-      let attributes = Object.keys(primitive.attributes)
+  renderNode(gl, node, modelMatrix) {
+    mat4.mul(modelMatrix, modelMatrix, node.matrix)
+    if (this.animations !== undefined) {
+      this.animations.forEach(animation => {
+        animation.channels.forEach(channel => {
+          if (node.id === channel.target.node.id) {
+            let duration = channel.sampler.input.max[0] - channel.sampler.input.min[0]
+            let currentValue = this.getCurrentValue(time / 1000 % duration, channel.sampler)
 
-      attributes.forEach(attribute => {
-        let bufferData = this.accessData(primitive.attributes[attribute])
-        primitive.attributes[attribute] = bufferData
-        switch (attribute) {
-          case "NORMAL":
-            primitive.defines.HAS_NORMALS = 1
-            break
-          case "TANGENT":
-            primitive.defines.HAS_TANGENTS = 1
-            break
-          case "TEXCOORD_0":
-            primitive.defines.HAS_UV = 1
-            break
-        }
-      })
-
-      if (primitive.material !== undefined) {
-        primitive.material = this.loadMaterial(primitive.material, primitive)
-      }
-
-      primitive.getDefines = function () {
-        let definesToString = function (defines) {
-          let outStr = ''
-          for (let def in defines) {
-            outStr += '#define ' + def + ' ' + defines[def] + '\n'
+            if (channel.target.path === 'scale') {
+              mat4.scale(modelMatrix, modelMatrix, currentValue)
+            } else if (channel.target.path === 'translation') {
+              mat4.translate(modelMatrix, modelMatrix, currentValue)
+            } else if (channel.target.path === 'rotation') {
+              let rotateAni = mat4.create()
+              mat4.fromQuat(rotateAni, currentValue)
+              mat4.mul(modelMatrix, modelMatrix, rotateAni)
+            }
           }
-          return outStr
-        }
-        return definesToString(this.defines)
-      }
-    }
-
-    return mesh
-  }
-
-  loadScene(sceneIndex) {
-    let scene = this.scenes[sceneIndex]
-    if (scene.id === sceneIndex) {
-      return node
-    }
-    scene.id = sceneIndex
-    if (scene.nodes !== undefined) {
-      let nodeIndexes = scene.nodes.slice()
-      scene.nodes = []
-      nodeIndexes.forEach(nodeIndex => {
-        scene.nodes.push(this.loadNode(nodeIndex))
+        })
       })
-    }
-
-    return scene
-  }
-
-  loadNode(nodeIndex) {
-    let node = this.nodes[nodeIndex]
-    if (node.id === nodeIndex) {
-      return node
-    }
-    node.id = nodeIndex
-    if (node.matrix === undefined) {
-      node.matrix = glm.mat4.create()
-      if (node.translation) {
-        glm.mat4.translate(node.matrix, node.matrix, node.translation)
-      }
-      if (node.rotation) {
-        let rotation = glm.mat4.create()
-        glm.mat4.fromQuat(rotation, node.rotation)
-        glm.mat4.mul(node.matrix, node.matrix, rotation)
-      }
-      if (node.scale) {
-        glm.mat4.scale(node.matrix, node.matrix, node.scale)
-      }
     }
     if (node.mesh !== undefined) {
-      node.mesh = this.loadMesh(node.mesh)
-    }
-    if (node.children !== undefined) {
-      node.children.forEach((childIndex, i) => {
-        node.children[i] = this.loadNode(childIndex)
+      let mvMatrix = mat4.create()
+      let mvpMatrix = mat4.create()
+      mat4.multiply(mvMatrix, this.view, modelMatrix)
+      mat4.multiply(mvpMatrix, this.projection, mvMatrix)
+      let modelInverse = mat4.create()
+      let normalMatrix = mat4.create()
+      mat4.invert(modelInverse, modelMatrix)
+      mat4.transpose(normalMatrix, modelInverse)
+
+      node.mesh.primitives.forEach(primitive => {
+        primitive.shader.use()
+        primitive.shader.setVec3('u_LightDirection', [3, 5, 4])
+        primitive.shader.setVec3('u_LightColor', [1, 1, 1])
+        primitive.shader.setVec3('u_Camera', this.view_postion)
+        primitive.shader.setMat4('u_MVPMatrix', mvpMatrix)
+        primitive.shader.setMat4('u_ModelMatrix', modelMatrix)
+        primitive.shader.setMat4('u_NormalMatrix', normalMatrix)
+
+        if (primitive.material !== undefined) {
+          this.useMaterial(primitive.material, gl, primitive.shader)
+        }
+        gl.bindVertexArray(primitive.vao)
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, primitive.indices.buffer)
+        gl.drawElements(gl.TRIANGLES, primitive.indices.count, primitive.indices.componentType, 0)
       })
     }
-    return node
-  }
-
-  accessData(accessorIndex) {
-    let accessor = this.accessors[accessorIndex]
-    if (accessor.id === accessorIndex) {
-      return accessor
+    if (node.children !== undefined) {
+      node.children.forEach(child => {
+        let childmodelMatrix = mat4.create()
+        mat4.copy(childmodelMatrix, modelMatrix)
+        this.renderNode(gl, child, childmodelMatrix)
+      })
     }
-    accessor.id = accessorIndex
-    let bufferView = this.bufferViews[accessor.bufferView]
-    let bin = this.binFiles[bufferView.buffer]
-    let stepSize = componentTypedArray[accessor.componentType].BYTES_PER_ELEMENT * typeSize[accessor.type]
-    let arrayType = componentTypedArray[accessor.componentType]
-    let start, end
-
-    start = 0
-    end = accessor.count * stepSize
-    if (bufferView.byteOffset !== undefined) {
-      start += bufferView.byteOffset
-      end += bufferView.byteOffset
-    }
-
-    accessor.itemSize = typeSize[accessor.type]
-    accessor.bufferData = new arrayType(bin.slice(start, end))
-    return accessor
   }
-
 }
 
 

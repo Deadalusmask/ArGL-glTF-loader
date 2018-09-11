@@ -112,6 +112,10 @@ class ArGL {
     if (this.options.desktopInput) {
       this.mouseInput.deltaX = 0
       this.mouseInput.deltaY = 0
+      if (this.mouseInput.drag) {
+        this.mouseInput.dragX = 0
+        this.mouseInput.dragY = 0
+      }
       this.mouseInput.wheelDeltaY = 0
     }
     requestAnimationFrame(this.render.bind(this))

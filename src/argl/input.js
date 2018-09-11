@@ -17,20 +17,36 @@ export default function Input(Argl) {
     function mouse_callback(e) {
       mouseInput.deltaX = e.movementX || 0
       mouseInput.deltaY = e.movementY || 0
+      if (mouseInput.drag) {
+        mouseInput.dragX = e.movementX || 0
+        mouseInput.dragY = e.movementY || 0
+      }
     }
     function wheel_callback(e) {
       mouseInput.wheelDeltaY = e.wheelDeltaY
+    }
+    function handleDragStart(e) {
+      mouseInput.drag = true
+      mouseInput.dragX = 0
+      mouseInput.dragY = 0
+    }
+    function handleDragEnd(e) {
+      mouseInput.drag = false
     }
     function addInputListener() {
       document.addEventListener('keydown', handleKeyDown)
       document.addEventListener('keyup', handleKeyUp)
       document.addEventListener('mousemove', mouse_callback)
+      document.addEventListener('mousedown', handleDragStart)
+      document.addEventListener('mouseup', handleDragEnd)
       document.addEventListener('wheel', wheel_callback)
     }
     function removeInputListener() {
       document.removeEventListener('keydown', handleKeyDown)
       document.removeEventListener('keyup', handleKeyUp)
       document.removeEventListener('mousemove', mouse_callback)
+      document.removeEventListener('mousedown', handleDragStart)
+      document.removeEventListener('mouseup', handleDragEnd)
       document.removeEventListener('wheel', wheel_callback)
     }
 
@@ -54,7 +70,7 @@ export default function Input(Argl) {
       }
     } else {
       el.contentEditable = 'true'
-      el.style.cursor = 'crosshair'
+      el.style.cursor = 'default'
       el.addEventListener('focus', addInputListener)
       el.addEventListener('blur', removeInputListener)
     }
